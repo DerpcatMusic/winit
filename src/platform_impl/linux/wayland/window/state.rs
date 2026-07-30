@@ -234,6 +234,13 @@ impl WindowState {
         })
     }
 
+    pub fn wayland_drag_origin(&self) -> Option<(WlSeat, NonZeroU32)> {
+        self.pointers.iter().filter_map(Weak::upgrade).find_map(|pointer| {
+            let data = pointer.pointer().winit_data();
+            data.active_drag_serial().map(|serial| (data.seat().clone(), serial))
+        })
+    }
+
     /// Get the current state of the frame callback.
     pub fn frame_callback_state(&self) -> FrameCallbackState {
         self.frame_callback_state

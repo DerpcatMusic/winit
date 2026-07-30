@@ -1,5 +1,6 @@
 //! The pointer events.
 
+use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -34,6 +35,8 @@ use crate::platform_impl::wayland::state::WinitState;
 use crate::platform_impl::wayland::{self, DeviceId, WindowId};
 
 pub mod relative_pointer;
+
+const BTN_LEFT: u32 = 0x110;
 
 impl PointerHandler for WinitState {
     fn pointer_frame(
@@ -142,7 +145,10 @@ impl PointerHandler for WinitState {
                     window.pointer_left(Arc::downgrade(themed_pointer));
 
                     // Remove the active surface.
-                    pointer.winit_data().inner.lock().unwrap().surface = None;
+                    let mut pointer_data = pointer.winit_data().inner.lock().unwrap();
+                    pointer_data.surface = None;
+                    pointer_data.active_drag_serial = None;
+                    drop(pointer_data);
 
                     self.events_sink
                         .push_window_event(WindowEvent::CursorLeft { device_id }, window_id);
@@ -155,15 +161,18 @@ impl PointerHandler for WinitState {
                 },
                 ref kind @ PointerEventKind::Press { button, serial, .. }
                 | ref kind @ PointerEventKind::Release { button, serial, .. } => {
-                    // Update the last button serial.
-                    pointer.winit_data().inner.lock().unwrap().latest_button_serial = serial;
+                    let pressed = matches!(kind, PointerEventKind::Press { .. });
+                    let mut pointer_data = pointer.winit_data().inner.lock().unwrap();
+                    pointer_data.latest_button_serial = serial;
+                    if button == BTN_LEFT {
+                        pointer_data.active_drag_serial =
+                            if pressed { NonZeroU32::new(serial) } else { None };
+                    }
+                    drop(pointer_data);
 
                     let button = wayland_button_to_winit(button);
-                    let state = if matches!(kind, PointerEventKind::Press { .. }) {
-                        ElementState::Pressed
-                    } else {
-                        ElementState::Released
-                    };
+                    let state =
+                        if pressed { ElementState::Pressed } else { ElementState::Released };
                     self.events_sink.push_window_event(
                         WindowEvent::MouseInput { device_id, state, button },
                         window_id,
@@ -306,6 +315,11 @@ impl WinitPointerData {
         self.sctk_data.latest_button_serial().unwrap_or_default()
     }
 
+    /// Active primary-button press authority.
+    pub fn active_drag_serial(&self) -> Option<NonZeroU32> {
+        self.inner.lock().unwrap().active_drag_serial
+    }
+
     /// Last enter serial.
     pub fn latest_enter_serial(&self) -> u32 {
         self.sctk_data.latest_enter_serial().unwrap_or_default()
@@ -348,6 +362,9 @@ pub struct WinitPointerDataInner {
     /// Serial of the last button event.
     latest_button_serial: u32,
 
+    /// Primary-button serial valid only while that button remains pressed.
+    active_drag_serial: Option<NonZeroU32>,
+
     /// Currently focused window.
     surface: Option<WindowId>,
 
@@ -374,6 +391,7 @@ impl Default for WinitPointerDataInner {
             locked_pointer: None,
             confined_pointer: None,
             latest_button_serial: 0,
+            active_drag_serial: None,
             phase: TouchPhase::Ended,
         }
     }
@@ -382,7 +400,6 @@ impl Default for WinitPointerDataInner {
 /// Convert the Wayland button into winit.
 fn wayland_button_to_winit(button: u32) -> MouseButton {
     // These values are coming from <linux/input-event-codes.h>.
-    const BTN_LEFT: u32 = 0x110;
     const BTN_RIGHT: u32 = 0x111;
     const BTN_MIDDLE: u32 = 0x112;
     const BTN_SIDE: u32 = 0x113;

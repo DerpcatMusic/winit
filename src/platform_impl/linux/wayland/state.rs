@@ -12,6 +12,7 @@ use sctk::reexports::client::protocol::wl_surface::WlSurface;
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
 
 use sctk::compositor::{CompositorHandler, CompositorState};
+use sctk::data_device_manager::DataDeviceManagerState;
 use sctk::output::{OutputHandler, OutputState};
 use sctk::registry::{ProvidesRegistryState, RegistryState};
 use sctk::seat::pointer::ThemedPointer;
@@ -24,6 +25,7 @@ use sctk::shm::{Shm, ShmHandler};
 use sctk::subcompositor::SubcompositorState;
 
 use crate::platform_impl::wayland::event_loop::sink::EventSink;
+use crate::platform_impl::wayland::outbound_drag::{OutboundDragState, SharedOutboundDrag};
 use crate::platform_impl::wayland::output::MonitorHandle;
 use crate::platform_impl::wayland::seat::{
     PointerConstraintsState, RelativePointerState, TextInputState, WinitPointerData,
@@ -80,6 +82,9 @@ pub struct WinitState {
 
     /// Currently present cursor surfaces.
     pub pointer_surfaces: AHashMap<ObjectId, Arc<ThemedPointer<WinitPointerData>>>,
+
+    /// Outbound data source dispatched by this event queue.
+    pub outbound_drag: SharedOutboundDrag,
 
     /// The state of the text input on the client.
     pub text_input_state: Option<TextInputState>,
@@ -142,6 +147,9 @@ impl WinitState {
         let monitors = output_state.outputs().map(MonitorHandle::new).collect();
 
         let seat_state = SeatState::new(globals, queue_handle);
+        let data_device_manager =
+            DataDeviceManagerState::bind(globals, queue_handle).ok().map(Arc::new);
+        let outbound_drag = Arc::new(Mutex::new(OutboundDragState::new(data_device_manager)));
 
         let mut seats = AHashMap::default();
         for seat in seat_state.seats() {
@@ -186,6 +194,7 @@ impl WinitState {
                 .map(Arc::new)
                 .ok(),
             pointer_surfaces: Default::default(),
+            outbound_drag,
 
             monitors: Arc::new(Mutex::new(monitors)),
             events_sink: EventSink::new(),

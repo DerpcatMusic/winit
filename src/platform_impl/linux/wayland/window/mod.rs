@@ -20,6 +20,9 @@ use crate::dpi::{LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 use crate::error::{ExternalError, NotSupportedError, OsError as RootOsError};
 use crate::event::{Ime, WindowEvent};
 use crate::event_loop::AsyncRequestSerial;
+use crate::platform::wayland::{
+    WaylandDataSourceHandler, WaylandDragError, WaylandDragToken, WaylandMimeData,
+};
 use crate::platform_impl::{
     Fullscreen, MonitorHandle as PlatformMonitorHandle, OsError, PlatformIcon,
 };
@@ -29,6 +32,7 @@ use crate::window::{
 };
 
 use super::event_loop::sink::EventSink;
+use super::outbound_drag::SharedOutboundDrag;
 use super::output::MonitorHandle;
 use super::state::WinitState;
 use super::types::xdg_activation::XdgActivationTokenData;
@@ -76,6 +80,9 @@ pub struct Window {
 
     /// The event sink to deliver synthetic events.
     window_events_sink: Arc<Mutex<EventSink>>,
+
+    /// Outbound data-source state owned by the event loop.
+    outbound_drag: SharedOutboundDrag,
 }
 
 impl Window {
@@ -229,6 +236,7 @@ impl Window {
             event_loop_awakener,
             window_requests,
             window_events_sink,
+            outbound_drag: state.outbound_drag.clone(),
         })
     }
 
@@ -241,6 +249,42 @@ impl Window {
     #[inline]
     pub fn id(&self) -> WindowId {
         self.window_id
+    }
+
+    pub fn wayland_drag_token(&self) -> Option<WaylandDragToken> {
+        if !self.outbound_drag.lock().unwrap().is_available() {
+            return None;
+        }
+        self.window_state
+            .lock()
+            .unwrap()
+            .wayland_drag_origin()
+            .map(|(_, serial)| WaylandDragToken::new(serial))
+    }
+
+    pub fn start_wayland_drag(
+        &self,
+        token: WaylandDragToken,
+        payloads: Vec<WaylandMimeData>,
+        handler: Box<dyn WaylandDataSourceHandler>,
+    ) -> Result<(), WaylandDragError> {
+        let (seat, serial) = self
+            .window_state
+            .lock()
+            .unwrap()
+            .wayland_drag_origin()
+            .ok_or(WaylandDragError::MissingPointerPress)?;
+        if serial != token.into_serial() {
+            return Err(WaylandDragError::MissingPointerPress);
+        }
+        self.outbound_drag.lock().unwrap().start(
+            &self.queue_handle,
+            self.window.wl_surface(),
+            &seat,
+            serial.get(),
+            payloads,
+            handler,
+        )
     }
 
     #[inline]
