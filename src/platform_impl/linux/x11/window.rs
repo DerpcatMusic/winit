@@ -109,6 +109,8 @@ unsafe impl Send for UnownedWindow {}
 unsafe impl Sync for UnownedWindow {}
 
 pub struct UnownedWindow {
+    #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+    pub(crate) external_xdnd: Option<Arc<super::external_xdnd::Creation>>,
     /// Immutable: external adapters must opt out before window creation.
     pub(crate) drag_and_drop: bool,
     pub(crate) xconn: Arc<XConnection>, // never changes
@@ -341,6 +343,8 @@ impl UnownedWindow {
 
         #[allow(clippy::mutex_atomic)]
         let mut window = UnownedWindow {
+            #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+            external_xdnd: None,
             drag_and_drop: window_attrs.platform_specific.x11.drag_and_drop,
             xconn: Arc::clone(xconn),
             xwindow: xwindow as xproto::Window,
@@ -355,6 +359,20 @@ impl UnownedWindow {
             redraw_sender: event_loop.redraw_sender.clone(),
             activation_sender: event_loop.activation_sender.clone(),
         };
+
+        #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+        if !window.drag_and_drop {
+            match super::external_xdnd::Creation::new(xconn, xwindow) {
+                Ok(binding) => window.external_xdnd = Some(binding),
+                Err(_) => {
+                    // No platform Window wrapper exists yet to own destruction.
+                    if let Ok(cookie) = xconn.xcb_connection().destroy_window(xwindow) {
+                        cookie.ignore_error();
+                    }
+                    return Err(os_error!(OsError::Misc("external XDND window binding failed")));
+                },
+            }
+        }
 
         // Title must be set before mapping. Some tiling window managers (i.e. i3) use the window
         // title to determine placement/etc., so doing this after mapping would cause the WM to

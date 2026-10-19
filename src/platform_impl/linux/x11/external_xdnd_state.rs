@@ -155,6 +155,10 @@ impl Drop for Lease {
 pub(crate) struct Pending(Option<Arc<Control>>);
 
 impl Pending {
+    pub(crate) fn sequence(&self) -> u64 {
+        self.0.as_ref().expect("unconsumed pending control").sequence
+    }
+
     pub(crate) fn activate(mut self) -> Result<Active, (Self, ActivateError)> {
         let control = self.0.as_ref().expect("unconsumed pending control");
         if thread::current().id() == control.host_thread {

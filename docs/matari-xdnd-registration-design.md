@@ -1,9 +1,9 @@
 # Proposed live-window XDND registration capability
 
-This is the design for a separate prerequisite after release commit
-`9f16e4093a42b180d78496ca285832a6b2d7b069`. It is not an implemented target,
-a MUI dependency change, or desktop application qualification. Native code is
-held pending independent review of the transaction and failure model.
+This is the design and qualification checklist for a separate prerequisite after
+release commit `9f16e4093a42b180d78496ca285832a6b2d7b069`. It is not a transfer
+target, a MUI dependency change, or desktop application qualification. The
+implementation requires independent source/native review before consumer use.
 
 ## Scope and public boundary
 
@@ -25,7 +25,8 @@ must occur on a different thread from preparation, checked before any I/O. The
 activated worker is not Send or Sync, so it and its native cleanup remain on
 that backend thread. No raw pointer, original connection, general property
 operation, callback under a native transaction, or event-queue API is exposed.
-These exact type/method names remain subject to the architecture review.
+The implemented activation is `ExternalXdndPending::connect`; it checks the
+actual native creation thread, even if prepare was called on another thread.
 
 ## Creation identity and server binding
 
@@ -60,7 +61,8 @@ separate worker connection which has already proved the target's creation
 identity. Its grab excludes the original connection as well as external peers.
 
 All connection setup, authentication, atom interning, entropy, proxy creation,
-memory allocation and backend work happen before the grab. Under the grab the
+application-state allocation and backend work happen before the grab. Bounded
+protocol-library reply/parser allocations can still occur. Under the grab the
 code performs only a fixed set of bounded property/root queries and writes.
 There are no callbacks, event-draining loops, mutex waits, original-connection
 requests or payload transfers. Install validates the creation proof, target
@@ -85,9 +87,14 @@ snapshot. This prevents an old generation's cleanup from deleting a replacement.
 
 A server grab stalls all other clients, even though the operation runs off the
 UI thread. Calling the worker method off-thread alone does not make it safe.
-The proposed fail-close transport wraps x11rb's nonblocking Stream read/write
-operations and applies one absolute transaction deadline to its blocking poll
-operation. Interrupted polls recompute the remaining time. An expired or failed
+The fail-close transport implements x11rb's nonblocking Stream interface with
+private narrow libc send/recvmsg/poll wrappers. It checks one absolute 500 ms
+transaction deadline in reads, writes, vectored writes, polls and between fixed
+protocol steps. Interrupted syscalls retry only after checking that same deadline.
+Continuous readable traffic cannot reset it. The transport also limits each
+packet to 256 KiB, and each transaction to 1 MiB and 256 received packets. It
+validates packet headers before exposing their lengths to the protocol allocator.
+Unexpected incoming/outgoing file descriptors are rejected. An expired or failed
 transport is unusable and is closed, releasing a grab when the server processes
 the disconnect. A stalled reply must not rely on a later cooperative flag check.
 
@@ -95,7 +102,15 @@ This still cannot promise a fixed desktop latency: the process may be paused,
 the OS may not schedule it, or the server may stop responding. The deadline
 transport and its shutdown/error/panic behavior require independent review and
 fault-injection qualification before native implementation is accepted. No
-unreviewed generic transport or watchdog service is introduced.
+unreviewed generic protocol stack or watchdog service is introduced.
+
+The supported feature graph excludes **x11rb's `tracing` feature**. Enabling
+it through Cargo feature unification can run tracing subscribers/global log
+callbacks in library requests under the grab, outside the transport deadline.
+A NoSubscriber scope alone cannot exclude log fallback. CI records and audits
+`cargo tree -e features -i x11rb`; MUI and application integration must repeat
+that audit. Arbitrary consumer feature combinations are not qualified. Winit's
+ordinary logging remains outside this transaction implementation.
 
 Revocation is immediate logical invalidation, not proof that native properties
 have already disappeared. An already queued publication can reach the server

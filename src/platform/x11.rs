@@ -137,9 +137,38 @@ impl<T> EventLoopBuilderExtX11 for EventLoopBuilder<T> {
 }
 
 /// Additional methods on [`Window`] that are specific to X11.
-pub trait WindowExtX11 {}
+pub trait WindowExtX11 {
+    /// Reserve a typed external-XDND worker for a live opt-out X11 window.
+    ///
+    /// Preparation and lease revocation perform no native I/O. Activation and
+    /// registration belong to a different backend thread. This optional Linux
+    /// capability does not implement transfer or operation completion.
+    #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+    fn prepare_external_xdnd(
+        &self,
+    ) -> Result<(ExternalXdndLease, ExternalXdndPending), ExternalXdndError>;
+}
 
-impl WindowExtX11 for Window {}
+impl WindowExtX11 for Window {
+    #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+    fn prepare_external_xdnd(
+        &self,
+    ) -> Result<(ExternalXdndLease, ExternalXdndPending), ExternalXdndError> {
+        match &self.window {
+            crate::platform_impl::Window::X(window) => {
+                window.external_xdnd.as_ref().ok_or(ExternalXdndError::BuiltinEnabled)?.prepare()
+            },
+            #[cfg(wayland_platform)]
+            _ => Err(ExternalXdndError::UnsupportedBackend),
+        }
+    }
+}
+
+#[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+pub use crate::platform_impl::x11::external_xdnd::{
+    ExternalXdndChallenge, ExternalXdndError, ExternalXdndLease, ExternalXdndPending,
+    ExternalXdndPhase, ExternalXdndRegistration, ExternalXdndStatus,
+};
 
 /// Additional methods on [`WindowAttributes`] that are specific to X11.
 pub trait WindowAttributesExtX11 {
