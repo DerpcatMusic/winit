@@ -4,33 +4,24 @@
 #![cfg(all(x11_platform, feature = "rwh_06"))]
 
 use rwh_06::{HasWindowHandle, RawWindowHandle};
-use std::{
-    fs,
-    path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{fs, thread};
+use winit::application::ApplicationHandler;
+use winit::event::WindowEvent;
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
+use winit::platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11};
+use winit::window::{Window, WindowId};
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{
+    self, AtomEnum, ConnectionExt as _, EventMask, PropMode, WindowClass,
 };
-use winit::{
-    application::ApplicationHandler,
-    event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
-    platform::{
-        run_on_demand::EventLoopExtRunOnDemand,
-        x11::{EventLoopBuilderExtX11, WindowAttributesExtX11},
-    },
-    window::{Window, WindowId},
-};
-use x11rb::{
-    connection::Connection,
-    protocol::{
-        xproto::{self, AtomEnum, ConnectionExt as _, EventMask, PropMode, WindowClass},
-        Event,
-    },
-    rust_connection::RustConnection,
-    wrapper::ConnectionExt as _,
-    COPY_DEPTH_FROM_PARENT, CURRENT_TIME,
-};
+use x11rb::protocol::Event;
+use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
+use x11rb::{COPY_DEPTH_FROM_PARENT, CURRENT_TIME};
 
 #[derive(Debug)]
 enum User {
@@ -202,12 +193,13 @@ impl Peer {
     }
     fn barrier(&mut self, window: u32) {
         let atom = |name: &[u8]| self.conn.intern_atom(false, name).unwrap().reply().unwrap().atom;
-        self.message(
-            window,
-            window,
-            atom(b"WM_PROTOCOLS"),
-            [atom(b"WM_DELETE_WINDOW"), 0, 0, 0, 0],
-        );
+        self.message(window, window, atom(b"WM_PROTOCOLS"), [
+            atom(b"WM_DELETE_WINDOW"),
+            0,
+            0,
+            0,
+            0,
+        ]);
         assert_eq!(self.marker.recv_timeout(Duration::from_secs(5)).unwrap(), window);
     }
     fn event(&mut self, timeout: Duration) -> Event {
