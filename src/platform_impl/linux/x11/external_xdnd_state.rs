@@ -63,6 +63,8 @@ impl Control {
     }
 
     fn status(&self) -> Status {
+        // A true release must not return a previously loaded nonterminal phase.
+        let released = self.released.load(Ordering::SeqCst);
         let phase = match self.phase.load(Ordering::SeqCst) {
             0 => Phase::Reserved,
             1 => Phase::Active,
@@ -72,11 +74,7 @@ impl Control {
             5 => Phase::Superseded,
             _ => Phase::Uncertain,
         };
-        Status {
-            revoked: self.revoked.load(Ordering::SeqCst),
-            released: self.released.load(Ordering::SeqCst),
-            phase,
-        }
+        Status { revoked: self.revoked.load(Ordering::SeqCst), released, phase }
     }
 }
 
@@ -195,12 +193,18 @@ impl Active {
     }
 
     pub(crate) fn installed(&self) -> bool {
-        if self.revoked() {
+        if self.revoked() || self.finished {
             return false;
         }
         self.control.phase.store(Phase::Installed as u8, Ordering::SeqCst);
         // A racing revoke remains visible and does not become "installed" proof.
         !self.revoked()
+    }
+
+    pub(crate) fn uncertain(&self) {
+        if !self.finished {
+            self.control.phase.store(Phase::Uncertain as u8, Ordering::SeqCst);
+        }
     }
 
     /// Native wrapper calls only after cleanup or closing its unique transport.

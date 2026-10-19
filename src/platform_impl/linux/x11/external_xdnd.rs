@@ -284,6 +284,8 @@ impl ExternalXdndPending {
             challenge,
             atoms,
             installed: None,
+            #[cfg(test)]
+            fail_after_first_property: false,
             control,
         })
     }
@@ -343,6 +345,8 @@ pub struct ExternalXdndRegistration {
     challenge: ExternalXdndChallenge,
     atoms: Atoms,
     installed: Option<u32>,
+    #[cfg(test)]
+    fail_after_first_property: bool,
     // Last field: the transport is closed before control abandonment releases.
     control: state::Active,
 }
@@ -362,6 +366,14 @@ impl ExternalXdndRegistration {
         if proxy == 0 || proxy == self.challenge.target {
             return Err(ExternalXdndError::MalformedProof);
         }
+        let outcome = self.install(proxy);
+        if outcome.is_err() && self.installed.is_some() && self.connection.is_some() {
+            self.control.uncertain();
+        }
+        outcome
+    }
+
+    fn install(&mut self, proxy: u32) -> Result<(), ExternalXdndError> {
         let conn = self.connection.as_ref().unwrap();
         let guard = Grab::new(conn)?;
         check_target(conn, &self.atoms, &self.challenge)?;
@@ -386,6 +398,11 @@ impl ExternalXdndRegistration {
             ))?
             .check(),
         )?;
+        #[cfg(test)]
+        if self.fail_after_first_property {
+            conn.stream().close();
+            return Err(ExternalXdndError::Native);
+        }
         native(
             native(conn.change_property32(
                 PropMode::REPLACE,
@@ -733,6 +750,38 @@ mod tests {
         });
         assert_eq!(fresh.status().phase, ExternalXdndPhase::Detached);
 
+        // Fault injection after the first acknowledged target property exercises
+        // the real publication path. Partial state remains explicit and never
+        // becomes a successful install or an unconditional detached claim.
+        let window = new_window();
+        let (lease, pending) = window.prepare_external_xdnd().unwrap();
+        backend(pending, |registration, peer, proxy| {
+            registration.fail_after_first_property = true;
+            assert_eq!(registration.install_proxy(proxy), Err(ExternalXdndError::Native));
+            let target = registration.challenge.target;
+            let value = peer
+                .get_property(false, target, registration.atoms.registration, AtomEnum::ANY, 0, 8)
+                .unwrap()
+                .reply()
+                .unwrap();
+            assert_eq!(value.value, registration.challenge.registration);
+            let value = peer
+                .get_property(false, target, registration.atoms.aware, AtomEnum::ANY, 0, 8)
+                .unwrap()
+                .reply()
+                .unwrap();
+            assert_eq!(value.type_, 0);
+            assert_eq!(registration.detach(), Err(ExternalXdndError::Native));
+        });
+        assert_eq!(lease.status().phase, ExternalXdndPhase::Uncertain);
+        assert!(lease.status().released);
+        // Native residue may reject the next install, but the memory slot is no
+        // longer Busy and the old lease has no control over its replacement.
+        let (replacement, pending) = window.prepare_external_xdnd().unwrap();
+        lease.revoke();
+        assert!(!replacement.status().revoked);
+        drop(pending);
+
         // Exact proof type, format, size and trailing-byte checks.
         for malformed in 0..4 {
             let window = new_window();
@@ -784,12 +833,7 @@ mod tests {
 
         // Admission never overwrites an existing target registration.
         let window = new_window();
-        let (_, pending) = window.prepare_external_xdnd().unwrap();
-        // Keep this lease alive: dropping it would deliberately revoke admission.
-        let (lease, pending) = {
-            drop(pending);
-            window.prepare_external_xdnd().unwrap()
-        };
+        let (lease, pending) = window.prepare_external_xdnd().unwrap();
         backend(pending, |registration, peer, proxy| {
             let target = registration.challenge.target;
             let atom = registration.atoms.proxy;
