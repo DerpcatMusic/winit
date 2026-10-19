@@ -347,8 +347,14 @@ mod tests {
             };
             assert_eq!(error.kind(), io::ErrorKind::TimedOut);
             assert!(stream.begin(Instant::now() + Duration::from_secs(1)).is_err());
-            // Drain the already-sent peer input is irrelevant to local shutdown.
-            assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+            assert!(stream.fd.borrow().is_none());
+            // Closing with unread peer input may deliver EOF or connection reset;
+            // both prove disconnect while the poisoned stream is still retained.
+            match peer.read(&mut [0; 1]) {
+                Ok(0) => {},
+                Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {},
+                result => panic!("poisoned transport retained its peer: {result:?}"),
+            }
         }
     }
 
