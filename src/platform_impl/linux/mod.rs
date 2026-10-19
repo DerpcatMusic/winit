@@ -80,6 +80,7 @@ pub struct PlatformSpecificWindowAttributes {
 #[derive(Clone, Debug)]
 #[cfg(x11_platform)]
 pub struct X11WindowAttributes {
+    pub drag_and_drop: bool,
     pub visual_id: Option<x11rb::protocol::xproto::Visualid>,
     pub screen_id: Option<i32>,
     pub base_size: Option<Size>,
@@ -98,6 +99,7 @@ impl Default for PlatformSpecificWindowAttributes {
             activation_token: None,
             #[cfg(x11_platform)]
             x11: X11WindowAttributes {
+                drag_and_drop: true,
                 visual_id: None,
                 screen_id: None,
                 base_size: None,

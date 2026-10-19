@@ -143,6 +143,16 @@ impl WindowExtX11 for Window {}
 
 /// Additional methods on [`WindowAttributes`] that are specific to X11.
 pub trait WindowAttributesExtX11 {
+    /// Enable winit's built-in XDND file-drop handling. Enabled by default.
+    ///
+    /// When disabled, winit neither advertises `XdndAware` nor processes XDND
+    /// client messages or selection notifications for this window, including
+    /// messages sent directly by peers that ignore target advertisement/proxies.
+    /// An external adapter can then own the protocol without winit sending its
+    /// own Status/Finished replies. This does not install an external adapter.
+    /// The setting is fixed when the window is created; it affects only X11.
+    fn with_x11_drag_and_drop(self, enabled: bool) -> Self;
+
     /// Create this window with a specific X11 visual.
     fn with_x11_visual(self, visual_id: XVisualID) -> Self;
 
@@ -196,6 +206,12 @@ pub trait WindowAttributesExtX11 {
 }
 
 impl WindowAttributesExtX11 for WindowAttributes {
+    #[inline]
+    fn with_x11_drag_and_drop(mut self, enabled: bool) -> Self {
+        self.platform_specific.x11.drag_and_drop = enabled;
+        self
+    }
+
     #[inline]
     fn with_x11_visual(mut self, visual_id: XVisualID) -> Self {
         self.platform_specific.x11.visual_id = Some(visual_id);

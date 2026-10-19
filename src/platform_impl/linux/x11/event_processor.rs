@@ -419,6 +419,15 @@ impl EventProcessor {
         let window = xev.window as xproto::Window;
         let window_id = mkwid(window);
 
+        // This guard must precede all protocol parsing and shared Dnd mutation.
+        // Suppressing advertisement alone cannot stop direct/noncompliant peers.
+        let xdnd_message = [XdndEnter, XdndPosition, XdndDrop, XdndLeave]
+            .iter()
+            .any(|&name| xev.message_type == atoms[name] as c_ulong);
+        if xdnd_message && !self.with_window(window, |w| w.drag_and_drop).unwrap_or(false) {
+            return;
+        }
+
         if xev.data.get_long(0) as xproto::Atom == wt.wm_delete_window {
             let event = Event::WindowEvent { window_id, event: WindowEvent::CloseRequested };
             callback(&self.target, event);
@@ -583,6 +592,12 @@ impl EventProcessor {
 
         let window = xev.requestor as xproto::Window;
         let window_id = mkwid(window);
+
+        // A stale or directly forged reply for an external target must not
+        // overwrite the global built-in drag state or trigger path parsing/I/O.
+        if !self.with_window(window, |w| w.drag_and_drop).unwrap_or(false) {
+            return;
+        }
 
         // Set the timestamp.
         wt.xconn.set_timestamp(xev.time as xproto::Timestamp);
