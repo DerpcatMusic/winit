@@ -48,7 +48,7 @@ impl Framing {
 
 /// This is deliberately not shared with any other connection or thread.
 pub(super) struct DeadlineStream {
-    fd: OwnedFd,
+    fd: RefCell<Option<OwnedFd>>,
     deadline: Cell<Instant>,
     poisoned: Cell<bool>,
     bytes: Cell<usize>,
@@ -59,7 +59,7 @@ pub(super) struct DeadlineStream {
 impl DeadlineStream {
     pub(super) fn new(stream: DefaultStream) -> Self {
         Self {
-            fd: stream.into(),
+            fd: RefCell::new(Some(stream.into())),
             deadline: Cell::new(Instant::now() + Duration::from_secs(5)),
             poisoned: Cell::new(false),
             bytes: Cell::new(0),
@@ -84,9 +84,23 @@ impl DeadlineStream {
     /// enters x11rb, takes protocol locks, flushes, logs or waits for the server.
     pub(super) fn close(&self) {
         self.poisoned.set(true);
-        // SAFETY: fd is uniquely owned and remains open for this syscall. The
-        // socket is nonblocking. shutdown does not access Rust memory.
-        unsafe { libc::shutdown(self.fd.as_raw_fd(), libc::SHUT_RDWR) };
+        if let Some(fd) = self.fd.borrow_mut().take() {
+            // SAFETY: fd is uniquely owned and remains open for this syscall.
+            // shutdown does not access Rust memory and waits for no reply.
+            unsafe { libc::shutdown(fd.as_raw_fd(), libc::SHUT_RDWR) };
+            // Close even if shutdown failed/interrupted. No retained descriptor
+            // owner may keep a poisoned grabbed connection alive. Linux closes
+            // the descriptor even when close reports an interrupted syscall.
+            drop(fd);
+        }
+    }
+
+    fn raw_fd(&self) -> io::Result<libc::c_int> {
+        self.fd
+            .borrow()
+            .as_ref()
+            .map(AsRawFd::as_raw_fd)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "XDND transport closed"))
     }
 
     pub(super) fn check(&self) -> io::Result<()> {
@@ -130,8 +144,7 @@ impl DeadlineStream {
             };
             // SAFETY: iov covers the exclusive output slice for this call; all
             // other pointers are null/zero. The owned FD is a nonblocking socket.
-            let result =
-                unsafe { libc::recvmsg(self.fd.as_raw_fd(), &mut message, libc::MSG_DONTWAIT) };
+            let result = unsafe { libc::recvmsg(self.raw_fd()?, &mut message, libc::MSG_DONTWAIT) };
             if result >= 0 {
                 if message.msg_flags & libc::MSG_CTRUNC != 0 {
                     return self.fail(io::ErrorKind::InvalidData, "unexpected XDND descriptors");
@@ -167,7 +180,7 @@ impl Stream for DeadlineStream {
             let remaining = self.deadline.get().saturating_duration_since(Instant::now());
             let millis = remaining.as_millis().saturating_add(1).min(i32::MAX as u128) as i32;
             let mut pollfd = libc::pollfd {
-                fd: self.fd.as_raw_fd(),
+                fd: self.raw_fd()?,
                 events: (if mode.readable() { libc::POLLIN } else { 0 })
                     | (if mode.writable() { libc::POLLOUT } else { 0 }),
                 revents: 0,
@@ -250,7 +263,7 @@ impl Stream for DeadlineStream {
             // MSG_NOSIGNAL prevent a blocking send and process-level SIGPIPE.
             let n = unsafe {
                 libc::send(
-                    self.fd.as_raw_fd(),
+                    self.raw_fd()?,
                     buf.as_ptr().cast(),
                     buf.len(),
                     libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
