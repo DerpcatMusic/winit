@@ -109,6 +109,8 @@ unsafe impl Send for UnownedWindow {}
 unsafe impl Sync for UnownedWindow {}
 
 pub struct UnownedWindow {
+    /// Immutable: external adapters must opt out before window creation.
+    pub(crate) drag_and_drop: bool,
     pub(crate) xconn: Arc<XConnection>, // never changes
     xwindow: xproto::Window,            // never changes
     #[allow(dead_code)]
@@ -339,6 +341,7 @@ impl UnownedWindow {
 
         #[allow(clippy::mutex_atomic)]
         let mut window = UnownedWindow {
+            drag_and_drop: window_attrs.platform_specific.x11.drag_and_drop,
             xconn: Arc::clone(xconn),
             xwindow: xwindow as xproto::Window,
             visual,
@@ -369,8 +372,9 @@ impl UnownedWindow {
         }
 
         {
-            // Enable drag and drop (TODO: extend API to make this toggleable)
-            {
+            // Only built-in targets advertise. An external adapter may install
+            // its own advertisement/proxy after binding the actual live window.
+            if window.drag_and_drop {
                 let dnd_aware_atom = atoms[XdndAware];
                 let version = &[5u32]; // Latest version; hasn't changed since 2002
                 leap!(xconn.change_property(

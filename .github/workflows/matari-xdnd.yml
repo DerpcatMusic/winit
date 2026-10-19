@@ -1,0 +1,62 @@
+name: Matari XDND qualification
+
+on:
+  pull_request:
+    branches: [release/0.30.13]
+  push:
+    branches: [release/0.30.13]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: matari-xdnd-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    name: Matari ${{ matrix.source }} on ${{ matrix.os }} (Rust 1.98.1)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+        source: [upstream-base, external-xdnd]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retain reviewed qualification lock
+        shell: bash
+        run: cp .github/ci/matari-0.30.13.lock "$RUNNER_TEMP/matari-0.30.13.lock"
+      - name: Select exact upstream baseline
+        if: matrix.source == 'upstream-base'
+        shell: bash
+        run: |
+          git fetch origin e9809ef54b18499bb4f2cac945719ecc2a61061b
+          git switch --detach e9809ef54b18499bb4f2cac945719ecc2a61061b
+      - name: Install fixed qualification lock
+        shell: bash
+        run: cp "$RUNNER_TEMP/matari-0.30.13.lock" Cargo.lock
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: Record exact source and toolchain
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          rustc --version --verbose
+          cargo --version
+      - name: Default library and integration tests
+        run: cargo test --locked --lib --tests
+      - name: Install owned X11 test server
+        if: matrix.os == 'ubuntu-24.04' && matrix.source == 'external-xdnd'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libxkbcommon-x11-0
+      - name: Native X11 opt-out and unchanged default drop
+        if: matrix.os == 'ubuntu-24.04' && matrix.source == 'external-xdnd'
+        run: >-
+          xvfb-run -a cargo test --locked --no-default-features --features x11,rwh_06
+          --test x11_external_dnd -- --ignored --nocapture
