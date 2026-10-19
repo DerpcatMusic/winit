@@ -40,6 +40,12 @@ mod activation;
 mod atoms;
 mod dnd;
 mod event_processor;
+#[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+pub(crate) mod external_xdnd;
+#[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+mod external_xdnd_state;
+#[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+mod external_xdnd_transport;
 pub mod ffi;
 mod ime;
 mod monitor;
@@ -802,6 +808,10 @@ impl Window {
 impl Drop for Window {
     fn drop(&mut self) {
         let window = self.deref();
+        #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+        if let Some(binding) = &window.external_xdnd {
+            binding.close();
+        }
         let xconn = &window.xconn;
 
         if let Ok(c) = xconn.xcb_connection().destroy_window(window.id().0 as xproto::Window) {

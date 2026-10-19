@@ -847,6 +847,12 @@ impl EventProcessor {
 
         // In the event that the window's been destroyed without being dropped first, we
         // cleanup again here.
+        #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+        self.with_window(window, |window| {
+            if let Some(binding) = &window.external_xdnd {
+                binding.close();
+            }
+        });
         wt.windows.borrow_mut().remove(&WindowId(window as _));
 
         // Since all XIM stuff needs to happen from the same thread, we destroy the input

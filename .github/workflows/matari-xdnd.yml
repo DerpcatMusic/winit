@@ -60,3 +60,22 @@ jobs:
         run: >-
           xvfb-run -a cargo test --locked --no-default-features --features x11,rwh_06
           --test x11_external_dnd -- --ignored --nocapture
+      - name: Audit qualified registration feature graph
+        if: matrix.os == 'ubuntu-24.04' && matrix.source == 'external-xdnd'
+        shell: bash
+        run: |
+          cargo tree --locked -e features --no-default-features --features external-xdnd,rwh_06 -i x11rb | tee "$RUNNER_TEMP/x11rb-registration-features.txt"
+          if grep -F 'x11rb feature "tracing"' "$RUNNER_TEMP/x11rb-registration-features.txt"; then
+            echo 'x11rb tracing callbacks are not qualified inside server-grab transactions'
+            exit 1
+          fi
+      - name: Registration lease and finite transport tests
+        if: matrix.os == 'ubuntu-24.04' && matrix.source == 'external-xdnd'
+        run: >-
+          cargo test --locked --no-default-features --features external-xdnd,rwh_06
+          --lib external_xdnd
+      - name: Native registration failure and teardown qualification
+        if: matrix.os == 'ubuntu-24.04' && matrix.source == 'external-xdnd'
+        run: >-
+          xvfb-run -a cargo test --locked --no-default-features --features external-xdnd,rwh_06
+          --lib native_registration_identity_cleanup_timeout_and_panic -- --ignored --nocapture

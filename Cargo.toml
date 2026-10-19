@@ -59,6 +59,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"]
 x11 = ["x11-dl", "bytemuck", "percent-encoding", "xkbcommon-dl/x11", "x11rb"]
+external-xdnd = ["x11", "rustix/rand"]
 wayland = [
     "wayland-client",
     "wayland-backend",
