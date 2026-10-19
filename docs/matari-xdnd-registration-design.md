@@ -92,7 +92,10 @@ private narrow libc send/recvmsg/poll wrappers. It checks one absolute 500 ms
 transaction deadline in reads, writes, vectored writes, polls and between fixed
 protocol steps. Interrupted syscalls retry only after checking that same deadline.
 Continuous readable traffic cannot reset it. The transport also limits each
-packet to 256 KiB, and each transaction to 1 MiB and 256 received packets. It
+packet to 256 KiB, and the entire worker connection lifetime to 1 MiB and 256
+received packets, including setup. Transaction restarts never reset traffic
+budgets: x11rb may retain broadcast events between admission retries, and that
+retained queue must remain bounded even if a caller retries indefinitely. It
 validates packet headers before exposing their lengths to the protocol allocator.
 Unexpected incoming/outgoing file descriptors are rejected. An expired or failed
 transport is unusable and is closed, releasing a grab when the server processes

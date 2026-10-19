@@ -75,8 +75,9 @@ impl DeadlineStream {
         // A previously completed transaction may have been idle longer than its
         // old deadline. Only an observed timeout permanently poisons the socket.
         self.deadline.set(deadline);
-        self.bytes.set(0);
-        self.packets.set(0);
+        // Never reset traffic budgets. x11rb may retain unsolicited broadcast
+        // events between transactions; retrying benign admission failures must
+        // not grow its private pending-event queue without a lifetime bound.
         self.check()
     }
 
@@ -121,7 +122,7 @@ impl DeadlineStream {
     fn account(&self, bytes: usize) -> io::Result<()> {
         let total = self.bytes.get().saturating_add(bytes);
         if total > MAX_BYTES {
-            return self.fail(io::ErrorKind::InvalidData, "XDND transaction byte budget");
+            return self.fail(io::ErrorKind::InvalidData, "XDND connection byte budget");
         }
         self.bytes.set(total);
         self.check()
@@ -381,15 +382,17 @@ mod tests {
     }
 
     #[test]
-    fn packet_budget_closes_an_unsolicited_event_flood() {
+    fn lifetime_packet_budget_survives_transaction_restarts() {
         let (stream, mut peer) = pair();
         stream.framing.borrow_mut().setup = false;
         let mut event = [0; 32];
         event[0] = 12;
         for _ in 0..MAX_PACKETS {
+            stream.begin(Instant::now() + Duration::from_secs(1)).unwrap();
             peer.write_all(&event).unwrap();
             assert_eq!(stream.read(&mut [0; 32], &mut Vec::new()).unwrap(), 32);
         }
+        stream.begin(Instant::now() + Duration::from_secs(1)).unwrap();
         peer.write_all(&event).unwrap();
         assert_eq!(
             stream.read(&mut [0; 32], &mut Vec::new()).unwrap_err().kind(),
