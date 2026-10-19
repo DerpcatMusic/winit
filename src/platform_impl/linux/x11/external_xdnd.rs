@@ -831,6 +831,74 @@ mod tests {
             assert_eq!(lease.status().phase, ExternalXdndPhase::Detached);
         }
 
+        // MappingNotify is broadcast even to a client that selected no events.
+        // Repeated benign admission failures must not grow x11rb's private
+        // pending-event queue across fresh transactions without a lifetime cap.
+        let window = new_window();
+        let (lease, pending) = window.prepare_external_xdnd().unwrap();
+        backend(pending, |registration, peer, proxy| {
+            let keycode = peer.setup().min_keycode;
+            let original = peer.get_keyboard_mapping(keycode, 1).unwrap().reply().unwrap();
+            let mut changed = original.keysyms.clone();
+            changed[0] ^= 1;
+            let mut wrong_proof = registration.challenge.creation;
+            wrong_proof[0] ^= 1;
+            peer.change_property8(
+                PropMode::REPLACE,
+                proxy,
+                registration.atoms.creation,
+                registration.atoms.creation,
+                &wrong_proof,
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+            let mut stopped = false;
+            for attempt in 0..256 {
+                let keysyms = if attempt % 2 == 0 { &changed } else { &original.keysyms };
+                peer.change_keyboard_mapping(1, keycode, original.keysyms_per_keycode, keysyms)
+                    .unwrap()
+                    .check()
+                    .unwrap();
+                match registration.install_proxy(proxy) {
+                    Err(ExternalXdndError::MalformedProof) => {},
+                    Err(ExternalXdndError::Native) => {
+                        stopped = true;
+                        break;
+                    },
+                    result => panic!("unexpected bounded-retry outcome: {result:?}"),
+                }
+            }
+            peer.change_keyboard_mapping(
+                1,
+                keycode,
+                original.keysyms_per_keycode,
+                &original.keysyms,
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+            assert!(stopped, "private event retention survived its lifetime packet cap");
+            assert!(registration.connection.as_ref().unwrap().stream().check().is_err());
+            assert_eq!(
+                peer.get_property(
+                    false,
+                    registration.challenge.target,
+                    registration.atoms.aware,
+                    AtomEnum::ANY,
+                    0,
+                    8
+                )
+                .unwrap()
+                .reply()
+                .unwrap()
+                .type_,
+                0
+            );
+        });
+        assert!(lease.status().released);
+        assert_eq!(lease.status().phase, ExternalXdndPhase::Detached);
+
         // Admission never overwrites an existing target registration.
         let window = new_window();
         let (lease, pending) = window.prepare_external_xdnd().unwrap();
