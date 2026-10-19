@@ -4,11 +4,15 @@ on:
   pull_request:
     branches: [release/0.30.13]
   push:
-    branches: [feat/external-xdnd, release/0.30.13]
+    branches: [release/0.30.13]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: matari-xdnd-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   compatibility:
