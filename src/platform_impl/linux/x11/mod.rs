@@ -44,6 +44,8 @@ pub mod ffi;
 mod ime;
 mod monitor;
 mod util;
+#[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+mod external_xdnd_state;
 mod window;
 mod xdisplay;
 mod xsettings;
